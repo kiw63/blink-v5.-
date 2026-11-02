@@ -1,0 +1,29 @@
+.env
+.env.*
+!.env.example
+node_modules/
+.next/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+*.sqlite*
+media/
+infra/ai-models/
+*.zip
+
+infra/ai-models/bin/realesrgan-ncnn-vulkan
+infra/ai-models/models/*.bin
+infra/ai-models/models/*.param
+# Generated Pages release, build and runtime artifacts
+_site/
+build/
+coverage/
+playwright-report/
+test-results/
+.env.local
+*.pem
+*.key
+
+# Generated synthetic video smoke files
+qa/blink-cnn-4k-video-smoke.webm

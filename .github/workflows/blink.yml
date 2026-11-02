@@ -1,0 +1,137 @@
+name: BLINK — Verify and Deploy GitHub Pages
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: blink-pages-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    name: Backend, integration, static contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install FFmpeg and backend dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg libzbar0
+          python -m pip install -r backend/requirements.txt
+          python -m pip install "pyzbar>=0.1.9,<1"
+      - name: Run full backend tests
+        working-directory: backend
+        run: python -m pytest -q
+      - name: Check unified repo and API contracts
+        run: |
+          python scripts/check_unified_repo.py
+          python scripts/check_static.py
+          python scripts/check_contract.py
+          python -m pytest -q scripts/test_launch_gate.py scripts/test_qris_integrity.py
+      - name: Validate published JavaScript syntax
+        run: |
+          for f in docs/assets/*.js; do node --check "$f"; done
+      - name: Prepare clean GitHub Pages artifact (PUBLIC URL ONLY)
+        env:
+          BLINK_API_BASE_URL: ${{ vars.BLINK_API_BASE_URL }}
+        run: python scripts/prepare_pages.py --output _site
+      - name: Verify bundled on-device neural model and backup assets
+        run: python scripts/test_ondevice_assets.py
+      - name: Verify public artifact excludes server and secrets
+        run: |
+          test -f _site/index.html
+          test ! -e _site/backend
+          test ! -e _site/.env
+          test ! -e _site/frontend
+      - name: Upload publish artifact for deployment job
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: blink-pages-verified
+          path: _site/
+          include-hidden-files: true
+          retention-days: 1
+  browser:
+    name: Chromium UI, photo, camera/video smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install browser QA dependencies
+        run: |
+          python -m pip install 'playwright==1.57.0' 'Pillow>=11,<13'
+          python -m playwright install --with-deps chromium
+          sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+      - name: Verify mobile/desktop UI and browser-generated media
+        run: |
+          python qa/browser_site_smoke.py
+          python qa/browser_media_smoke.py
+          python qa/browser_capture_smoke.py
+          python qa/browser_video_filters.py
+          python qa/browser_ondevice_ai.py
+          python qa/browser_ondevice_video_encode.py
+          python qa/browser_smart_backup_mock.py
+  deploy:
+    name: Publish verified BLINK Studio
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [validate, browser]
+    runs-on: ubuntu-latest
+    outputs:
+      site_url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: blink-pages-verified
+          path: _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  production_smoke:
+    name: Verify LIVE website + API + model + QRIS config
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Live production smoke (fail closed; no fake AI or bank settlement)
+        env:
+          SITE_URL: ${{ needs.deploy.outputs.site_url }}
+          API_URL: ${{ vars.BLINK_API_BASE_URL }}
+          ADMIN_URL: ${{ vars.BLINK_ADMIN_URL }}
+        run: |
+          if [ -z "$SITE_URL" ] || [ -z "$API_URL" ] || [ -z "$ADMIN_URL" ]; then
+            echo '::error::Set GitHub Actions variables BLINK_API_BASE_URL and BLINK_ADMIN_URL to the LIVE HTTPS origins.'
+            exit 1
+          fi
+          python scripts/launch_gate.py --site "$SITE_URL" --api "$API_URL" --admin "$ADMIN_URL" --report BLINK_LAUNCH_GATE_RESULT.json
+      - name: Upload production smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blink-live-production-smoke
+          path: BLINK_LAUNCH_GATE_RESULT.json
+          if-no-files-found: ignore
+          retention-days: 14
