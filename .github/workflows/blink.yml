@@ -61,7 +61,7 @@ jobs:
           retention-days: 1
   browser:
     name: Chromium UI, photo, camera/video smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
