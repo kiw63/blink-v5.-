@@ -1,0 +1,12 @@
+__pycache__
+*.pyc
+.pytest_cache
+.coverage
+.venv
+venv
+.env
+.env.*
+*.db
+private-media
+.git
+.DS_Store
